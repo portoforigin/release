@@ -1,7 +1,6 @@
 package object
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -9,11 +8,12 @@ import (
 	"io"
 	"strings"
 
-	"golang.org/x/crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/utils/ioutil"
+	"github.com/go-git/go-git/v5/utils/sync"
 )
 
 const (
@@ -180,9 +180,8 @@ func (c *Commit) Decode(o plumbing.EncodedObject) (err error) {
 	}
 	defer ioutil.CheckClose(reader, &err)
 
-	r := bufPool.Get().(*bufio.Reader)
-	defer bufPool.Put(r)
-	r.Reset(reader)
+	r := sync.GetBufioReader(reader)
+	defer sync.PutBufioReader(r)
 
 	var message bool
 	var pgpsig bool
@@ -243,16 +242,16 @@ func (c *Commit) Decode(o plumbing.EncodedObject) (err error) {
 }
 
 // Encode transforms a Commit into a plumbing.EncodedObject.
-func (b *Commit) Encode(o plumbing.EncodedObject) error {
-	return b.encode(o, true)
+func (c *Commit) Encode(o plumbing.EncodedObject) error {
+	return c.encode(o, true)
 }
 
 // EncodeWithoutSignature export a Commit into a plumbing.EncodedObject without the signature (correspond to the payload of the PGP signature).
-func (b *Commit) EncodeWithoutSignature(o plumbing.EncodedObject) error {
-	return b.encode(o, false)
+func (c *Commit) EncodeWithoutSignature(o plumbing.EncodedObject) error {
+	return c.encode(o, false)
 }
 
-func (b *Commit) encode(o plumbing.EncodedObject, includeSig bool) (err error) {
+func (c *Commit) encode(o plumbing.EncodedObject, includeSig bool) (err error) {
 	o.SetType(plumbing.CommitObject)
 	w, err := o.Writer()
 	if err != nil {
@@ -261,11 +260,11 @@ func (b *Commit) encode(o plumbing.EncodedObject, includeSig bool) (err error) {
 
 	defer ioutil.CheckClose(w, &err)
 
-	if _, err = fmt.Fprintf(w, "tree %s\n", b.TreeHash.String()); err != nil {
+	if _, err = fmt.Fprintf(w, "tree %s\n", c.TreeHash.String()); err != nil {
 		return err
 	}
 
-	for _, parent := range b.ParentHashes {
+	for _, parent := range c.ParentHashes {
 		if _, err = fmt.Fprintf(w, "parent %s\n", parent.String()); err != nil {
 			return err
 		}
@@ -275,7 +274,7 @@ func (b *Commit) encode(o plumbing.EncodedObject, includeSig bool) (err error) {
 		return err
 	}
 
-	if err = b.Author.Encode(w); err != nil {
+	if err = c.Author.Encode(w); err != nil {
 		return err
 	}
 
@@ -283,11 +282,11 @@ func (b *Commit) encode(o plumbing.EncodedObject, includeSig bool) (err error) {
 		return err
 	}
 
-	if err = b.Committer.Encode(w); err != nil {
+	if err = c.Committer.Encode(w); err != nil {
 		return err
 	}
 
-	if b.PGPSignature != "" && includeSig {
+	if c.PGPSignature != "" && includeSig {
 		if _, err = fmt.Fprint(w, "\n"+headerpgp+" "); err != nil {
 			return err
 		}
@@ -296,14 +295,14 @@ func (b *Commit) encode(o plumbing.EncodedObject, includeSig bool) (err error) {
 		// newline. Use join for this so it's clear that a newline should not be
 		// added after this section, as it will be added when the message is
 		// printed.
-		signature := strings.TrimSuffix(b.PGPSignature, "\n")
+		signature := strings.TrimSuffix(c.PGPSignature, "\n")
 		lines := strings.Split(signature, "\n")
 		if _, err = fmt.Fprint(w, strings.Join(lines, "\n ")); err != nil {
 			return err
 		}
 	}
 
-	if _, err = fmt.Fprintf(w, "\n\n%s", b.Message); err != nil {
+	if _, err = fmt.Fprintf(w, "\n\n%s", c.Message); err != nil {
 		return err
 	}
 
@@ -374,7 +373,7 @@ func (c *Commit) Verify(armoredKeyRing string) (*openpgp.Entity, error) {
 		return nil, err
 	}
 
-	return openpgp.CheckArmoredDetachedSignature(keyring, er, signature)
+	return openpgp.CheckArmoredDetachedSignature(keyring, er, signature, nil)
 }
 
 func indent(t string) string {

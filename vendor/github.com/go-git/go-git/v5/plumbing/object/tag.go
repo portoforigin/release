@@ -1,18 +1,18 @@
 package object
 
 import (
-	"bufio"
 	"bytes"
 	"fmt"
 	"io"
 	stdioutil "io/ioutil"
 	"strings"
 
-	"golang.org/x/crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/utils/ioutil"
+	"github.com/go-git/go-git/v5/utils/sync"
 )
 
 // Tag represents an annotated tag object. It points to a single git object of
@@ -93,9 +93,9 @@ func (t *Tag) Decode(o plumbing.EncodedObject) (err error) {
 	}
 	defer ioutil.CheckClose(reader, &err)
 
-	r := bufPool.Get().(*bufio.Reader)
-	defer bufPool.Put(r)
-	r.Reset(reader)
+	r := sync.GetBufioReader(reader)
+	defer sync.PutBufioReader(r)
+
 	for {
 		var line []byte
 		line, err = r.ReadBytes('\n')
@@ -304,7 +304,7 @@ func (t *Tag) Verify(armoredKeyRing string) (*openpgp.Entity, error) {
 		return nil, err
 	}
 
-	return openpgp.CheckArmoredDetachedSignature(keyring, er, signature)
+	return openpgp.CheckArmoredDetachedSignature(keyring, er, signature, nil)
 }
 
 // TagIter provides an iterator for a set of tags.
