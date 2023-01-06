@@ -53,7 +53,7 @@ func main() {
 
 	modules := []string{}
 	var remote, message string
-	var verbose, dryRun, doPush bool
+	var verbose, dryRun, doPush, semVer, incMajor, incMinor, incPatch bool
 	var user, email, sshKeyPath string
 	format := "%Y.%m."
 	defaultRemote := "origin"
@@ -63,6 +63,10 @@ func main() {
 	flag.StringVar(&user, "user", "", "override user in ~/.gitconfig")
 	flag.StringVar(&email, "email", "", "override email in ~/.gitconfig")
 	// flag.StringVarP(&format, "fmt", "f", "%Y.%m.", "date format to use")
+	flag.BoolVar(&semVer, "semver", false, "use semantic versioning <major>.<minor>.<patch>-<rc>")
+	flag.BoolVar(&incMajor, "inc-major", false, "increment major version of semantic version")
+	flag.BoolVar(&incMinor, "inc-minor", false, "increment minor version of semantic version")
+	flag.BoolVar(&incPatch, "inc-patch", false, "increment patch version of semantic version")
 	flag.BoolVarP(&verbose, "verbose", "v", false, "enable more output")
 	flag.BoolVar(&doPush, "push", false, "push tag to default remote (does 'git push')")
 	flag.BoolVarP(&dryRun, "dry-run", "n", false, "don't create a release, just print what would be released")
@@ -125,15 +129,29 @@ func main() {
 	rm.AlwaysIncludeNumber = true
 
 	release.CheckIfError(err, "failed to load release manager")
-	proposedDate := rm.GetProposedDate()
+
 	newReleases := []string{}
-	for _, module := range modules {
-		if module == "" {
-			newReleases = append(newReleases, proposedDate)
-		} else {
-			newReleases = append(newReleases, fmt.Sprintf("%s-%s", proposedDate, module))
+	if semVer {
+		proposedSemVer := rm.GetProposedSemName()
+		proposedSemVer.IncrementVersion(incMajor, incMinor, incPatch)
+		for _, module := range modules {
+			branch, err := rm.GetBranch()
+			if err != nil {
+				log.Fatal().Msgf("Unable to get current branch: %s", err.Error())
+			}
+			newReleases = append(newReleases, proposedSemVer.FormatRelease(module, branch))
+		}
+	} else {
+		proposedDate := rm.GetProposedDate()
+		for _, module := range modules {
+			if module == "" {
+				newReleases = append(newReleases, proposedDate)
+			} else {
+				newReleases = append(newReleases, fmt.Sprintf("%s-%s", proposedDate, module))
+			}
 		}
 	}
+
 	plural := ""
 	if len(newReleases) > 1 {
 		plural = "s"
@@ -180,5 +198,4 @@ func main() {
 		fmt.Printf("tag%s (%s) not pushed (--push not set), push it with:\n", plural, strings.Join(newReleases, ", "))
 		fmt.Printf(" git push %s %s\n", remote, strings.Join(newReleases, " "))
 	}
-
 }

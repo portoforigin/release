@@ -3,6 +3,7 @@ package release
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -222,6 +223,48 @@ func (r *Manager) CreateTag(name, comment, user, email string) (*plumbing.Refere
 	return r.repo.CreateTag(name, hash.Hash(), opts)
 }
 
+func (r *Manager) GetBranch() (string, error) {
+	hash, err := r.repo.Head()
+	if err != nil {
+		return "", err
+	}
+	branch := hash.Name().Short()
+	return branch, nil
+}
+
+func (r *Manager) CommitVersionFile(fname, user, email, version string) error {
+	w, err := r.repo.Worktree()
+	CheckIfError(err, "failed to get repo work tree")
+	// w.Add(fname)
+	_, err = exec.Command("git", "add", fname).Output()
+	CheckIfError(err, "failed to add version file")
+	commit, err := w.Commit("Updated version number to "+version, &git.CommitOptions{
+		Author: &object.Signature{
+			Name:  user,
+			Email: email,
+			When:  time.Now(),
+		},
+	})
+	CheckIfError(err, "failed to commit version file")
+	log.Info().Msgf("created commit hash for version file: %s", commit)
+	return err
+}
+
+// PushCommitToRemote pushes local commits to remote
+func (r *Manager) PushCommitToRemote(remote string, auth transport.AuthMethod) (string, error) {
+	options := &git.PushOptions{
+		RemoteName: remote,
+		Auth:       auth,
+	}
+	err := r.repo.Push(options)
+	if err == git.NoErrAlreadyUpToDate {
+		return fmt.Sprintf("nothing pushed, repo was up to date in remote %s", remote), nil
+	} else if err != nil {
+		return fmt.Sprintf("failed to push commits to remote %s", remote), err
+	}
+	return fmt.Sprintf("pushed commits to remote %s", remote), err
+}
+
 var pat = regexp.MustCompile(`^(?P<year>\d{4})\.(?P<month>\d{2})\.(?P<release>\d{3,})-.*$`)
 
 type calVerStandard struct {
@@ -306,4 +349,98 @@ func (r *Manager) GetProposedName(name string) string {
 func (r *Manager) GetProposedDate() string {
 	now := time.Now()
 	return r.getNextDateString("", now)
+}
+
+var patSem = regexp.MustCompile(`^(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)-(?P<release>\d+)$`)
+
+type semVerStandard struct {
+	Major   uint64
+	Minor   uint64
+	Patch   uint64
+	Release uint64
+}
+
+func newSemVerStandard(major, minor, patch, rel uint64) *semVerStandard {
+	return &semVerStandard{
+		Major:   major,
+		Minor:   minor,
+		Patch:   patch,
+		Release: rel,
+	}
+}
+
+func (c *semVerStandard) String() string {
+	return fmt.Sprintf("Release: %d.%d.%d-%d", c.Major, c.Minor, c.Patch, c.Release)
+}
+
+func (c *semVerStandard) FormatRelease(release string, branch string) string {
+	prefix := ""
+	if !(branch == "master" || branch == "main") {
+		prefix = fmt.Sprintf("%s-", branch)
+	}
+
+	if release == "" {
+		return fmt.Sprintf("%s%d.%d.%d-%d", prefix, c.Major, c.Minor, c.Patch, c.Release)
+	}
+	return fmt.Sprintf("%s%d.%d.%d-%d-%s", prefix, c.Major, c.Minor, c.Patch, c.Release, release)
+}
+
+func (c *semVerStandard) IsAfter(other *semVerStandard) bool {
+	// Check to see of the other is greater than us, return the opposite of that
+	return !(other.Major > c.Major ||
+		(other.Major <= c.Major && other.Minor > c.Minor) ||
+		(other.Major <= c.Major && other.Minor <= c.Minor && other.Patch > c.Patch) ||
+		(other.Major <= c.Major && other.Minor <= c.Minor && other.Patch <= c.Patch && other.Release > c.Release))
+}
+
+func (c *semVerStandard) Increase() *semVerStandard {
+	c.Release++
+	return c
+}
+
+func (c *semVerStandard) IncrementVersion(incMajor, incMinor, incPatch bool) {
+	if incMajor {
+		c.Major++
+		c.Release = 1
+	}
+	if incMinor {
+		c.Minor++
+		c.Release = 1
+	}
+	if incPatch {
+		c.Patch++
+		c.Release = 1
+	}
+}
+
+func (r *Manager) getNextSemVersion() *semVerStandard {
+	// Create a new semVerStandard object to use as a baseline comparison. We do
+	// this with a 0 release time so this function can blindly call .Increase()
+	// at the end and not have to deal with a case where we created our own
+	// versus a case where we found another tag. If we find one (say .023) we'll
+	// have to increase it, but I want to reduce the branches so I just set this
+	// to 0, so the default entry will be 001
+	latest := newSemVerStandard(0, 0, 0, 0)
+	for _, release := range r.releases {
+		if patSem.MatchString(release.Tag) {
+			results := patSem.FindStringSubmatch(release.Tag)
+			major, _ := strconv.ParseUint(results[1], 10, 64)
+			minor, _ := strconv.ParseUint(results[2], 10, 64)
+			patch, _ := strconv.ParseUint(results[3], 10, 64)
+			relNum, _ := strconv.ParseUint(results[4], 10, 64)
+			rev := newSemVerStandard(major, minor, patch, relNum)
+			if rev.IsAfter(latest) {
+				latest = rev
+			}
+		}
+	}
+
+	// Always increase the release before returning, this way we always get a
+	// unique one.
+	return latest.Increase()
+}
+
+// GetProposedName returns a proposed name for the next release tag
+func (r *Manager) GetProposedSemName() *semVerStandard {
+	return r.getNextSemVersion()
 }
