@@ -82,7 +82,7 @@ func main() {
 	}
 
 	if len(modules) == 0 {
-		modules = append(modules, "release")
+		modules = append(modules, "")
 	}
 
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
@@ -128,7 +128,11 @@ func main() {
 	proposedDate := rm.GetProposedDate()
 	newReleases := []string{}
 	for _, module := range modules {
-		newReleases = append(newReleases, fmt.Sprintf("%s-%s", proposedDate, module))
+		if module == "" {
+			newReleases = append(newReleases, proposedDate)
+		} else {
+			newReleases = append(newReleases, fmt.Sprintf("%s-%s", proposedDate, module))
+		}
 	}
 	plural := ""
 	if len(newReleases) > 1 {
